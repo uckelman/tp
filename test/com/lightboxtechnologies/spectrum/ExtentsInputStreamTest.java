@@ -18,19 +18,30 @@ package com.lightboxtechnologies.spectrum;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.MapFile;
+import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.io.WritableComparable;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import static org.junit.Assert.*;
 
+import org.hamcrest.Description;
+import org.jmock.Expectations;
 import org.jmock.Mockery;
+import org.jmock.api.Action;
+import org.jmock.api.Invocation;
 import org.jmock.integration.junit4.JMock;
 import org.jmock.integration.junit4.JUnit4Mockery;
 import org.jmock.lib.legacy.ClassImposteriser;
@@ -44,32 +55,56 @@ public class ExtentsInputStreamTest {
     }
   };
 
-  protected class ArrayFSDataInputStream extends FSDataInputStream {
+  protected static class FillBytesWritable implements Action {
     protected final byte[] src;
 
-    public ArrayFSDataInputStream(byte[] src) throws IOException {
-      super(context.mock(FSDataInputStream.class));
+    public FillBytesWritable(byte[] src) {
       this.src = src;
     }
 
-    @Override
-    public void close() {}
-
-    @Override
-    public int read(long pos, byte[] buf, int off, int len) {
-      final int rlen = Math.min(src.length - (int) pos, len);
-      System.arraycopy(src, (int) pos, buf, off, rlen);
-      return rlen;
+    public void describeTo(Description desc) {
+      desc.appendText("fills a BytesWritable with bytes ")
+          .appendText(src.toString());
     }
+
+    public Object invoke(Invocation inv) throws Throwable {
+      ((BytesWritable)inv.getParameter(1)).set(src, 0, src.length);
+      return null;
+    }
+  }
+
+  protected static Action fillBytesWritable(byte[] src) {
+    return new FillBytesWritable(src);
+  }
+
+  protected static class ReturnNewLongWritable implements Action {
+    protected final long val;
+
+    public ReturnNewLongWritable(long val) {
+      this.val = val;
+    }
+
+    public void describeTo(Description desc) {
+      desc.appendText("creates a new LongWritable with value ")
+          .appendValue(val);
+    }
+
+    public Object invoke(Invocation inv) throws Throwable {
+      return new LongWritable(val);
+    }
+  }
+
+  protected static Action returnNewLongWritable(long val) {
+    return new ReturnNewLongWritable(val);
   }
 
   @Test
   public void readArrayNoExtentsTest() throws IOException {
     final List<Map<String,Object>> extents = Collections.emptyList();
     
-    final FSDataInputStream in = new ArrayFSDataInputStream(new byte[0]);
-   
-    final InputStream eis = new ExtentsInputStream(in, extents);
+    final MapFile.Reader r = context.mock(MapFile.Reader.class);
+ 
+    final InputStream eis = new ExtentsInputStream(r, extents);
 
     final byte[] buf = { 17 };
 
@@ -81,9 +116,9 @@ public class ExtentsInputStreamTest {
   public void readByteNoExtentsTest() throws IOException {
     final List<Map<String,Object>> extents = Collections.emptyList();
     
-    final FSDataInputStream in = new ArrayFSDataInputStream(new byte[0]);
+    final MapFile.Reader r = context.mock(MapFile.Reader.class);
 
-    final InputStream eis = new ExtentsInputStream(in, extents);
+    final InputStream eis = new ExtentsInputStream(r, extents);
 
     assertEquals(-1, eis.read());
   }
@@ -104,9 +139,22 @@ public class ExtentsInputStreamTest {
     final byte[] expected = new byte[10];
     System.arraycopy(src, 42, expected, 0, 10);
 
-    final FSDataInputStream in = new ArrayFSDataInputStream(src);
+    final MapFile.Reader r = context.mock(MapFile.Reader.class);
+    context.checking(new Expectations() {
+      {
+        oneOf(r).getClosest(
+          with(any(WritableComparable.class)),
+          with(any(Writable.class)),
+          with(any(boolean.class))
+        );
+        will(doAll(
+          fillBytesWritable(src),
+          returnNewLongWritable(0))
+        );
+      }
+    });
 
-    final InputStream eis = new ExtentsInputStream(in, extents);
+    final InputStream eis = new ExtentsInputStream(r, extents);
 
     final byte[] actual = new byte[expected.length];
     assertEquals(10, eis.read(actual, 0, actual.length));
@@ -126,9 +174,22 @@ public class ExtentsInputStreamTest {
       src[i] = (byte) (i % 256);
     }
 
-    final FSDataInputStream in = new ArrayFSDataInputStream(src);
+    final MapFile.Reader r = context.mock(MapFile.Reader.class);
+    context.checking(new Expectations() {
+      {
+        oneOf(r).getClosest(
+          with(any(WritableComparable.class)),
+          with(any(Writable.class)),
+          with(any(boolean.class))
+        );
+        will(doAll(
+          fillBytesWritable(src),
+          returnNewLongWritable(0))
+        );
+      }
+    });
 
-    final InputStream eis = new ExtentsInputStream(in, extents);
+    final InputStream eis = new ExtentsInputStream(r, extents);
 
     assertEquals(src[42], eis.read());
   }
@@ -152,9 +213,22 @@ public class ExtentsInputStreamTest {
       extents.add(extent);
     }      
 
-    final FSDataInputStream in = new ArrayFSDataInputStream(src);
+    final MapFile.Reader r = context.mock(MapFile.Reader.class);
+    context.checking(new Expectations() {
+      {
+        exactly(extents.size()).of(r).getClosest(
+          with(any(WritableComparable.class)),
+          with(any(Writable.class)),
+          with(any(boolean.class))
+        );
+        will(doAll(
+          fillBytesWritable(src),
+          returnNewLongWritable(0))
+        );
+      }
+    });
 
-    final InputStream eis = new ExtentsInputStream(in, extents);
+    final InputStream eis = new ExtentsInputStream(r, extents);
 
     for (int i = 0; i < extents.size(); ++i) {
       final int rlen = ((Number) extents.get(i).get("len")).intValue();
@@ -162,9 +236,8 @@ public class ExtentsInputStreamTest {
       final byte[] actual = new byte[rlen];
       assertEquals(rlen, eis.read(actual, 0, rlen));
 
-      final byte[] expected = new byte[rlen];
       final int addr = ((Number) extents.get(i).get("addr")).intValue();
-      System.arraycopy(src, addr, expected, 0, rlen);
+      final byte[] expected = Arrays.copyOfRange(src, addr, addr + rlen);
 
       assertArrayEquals(expected, actual);
     }

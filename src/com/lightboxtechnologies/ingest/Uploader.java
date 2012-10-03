@@ -21,16 +21,19 @@ import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.MapFile;
+import org.apache.hadoop.io.SequenceFile;
+import org.apache.hadoop.io.compress.GzipCodec;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 import org.apache.commons.codec.binary.Hex;
-import org.apache.commons.codec.DecoderException;
 
 import java.io.IOException;
 import java.security.DigestInputStream;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 
 import com.lightboxtechnologies.io.IOUtils;
 import com.lightboxtechnologies.spectrum.FsEntryUtils;
@@ -51,10 +54,33 @@ public class Uploader extends Configured implements Tool {
     final DigestInputStream hashedIn = new DigestInputStream(System.in, hasher);
 
     final FileSystem fs = FileSystem.get(conf);
-    final Path path = new Path(dst);
-    final FSDataOutputStream outFile = fs.create(path, true);
 
-    IOUtils.copyLarge(hashedIn, outFile, new byte[1024 * 1024]);
+    final LongWritable key = new LongWritable(0);
+    final BytesWritable val = new BytesWritable(new byte[1024*1024]);
+
+    final MapFile.Writer w = new MapFile.Writer(
+      conf,
+      new Path(dst),
+      MapFile.Writer.keyClass(key.getClass()),
+      MapFile.Writer.valueClass(val.getClass()),
+      MapFile.Writer.compression(
+        SequenceFile.CompressionType.BLOCK,
+        new GzipCodec() 
+      )
+    );
+
+    System.err.println("Writing chunks:");
+
+    int rlen;
+    while ((rlen = IOUtils.read(hashedIn, val.getBytes())) > 0) {
+      System.err.println(key.get());
+      val.setSize(rlen);
+      w.append(key, val);
+      key.set(key.get() + rlen);
+    }
+
+    w.close();
+
     System.out.println(Hex.encodeHexString(hasher.digest()));
     return 0;
   }

@@ -18,11 +18,13 @@ package com.lightboxtechnologies.spectrum;
 
 import java.io.InputStream;
 import java.io.IOException;
+import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.Path;
 
 public interface StreamProxy {
   /** Returns an open {@link InputStream} */
-  public InputStream open(FileSystem fs, FSDataInputStream di, FsEntry entry) throws IOException;
+  public InputStream open(FileSystem fs, Path mf, List<Map<String,Object>> extents) throws IOException;
 }

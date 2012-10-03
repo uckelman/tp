@@ -16,14 +16,15 @@ limitations under the License.
 
 package com.lightboxtechnologies.spectrum;
 
-import java.io.EOFException;
 import java.io.InputStream;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.io.BytesWritable;
+import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.MapFile;
 
 /**
  * An {@link InputStream} which reads sequentially from a list of extents.
@@ -32,19 +33,20 @@ import org.apache.hadoop.fs.FSDataInputStream;
  */
 public class ExtentsInputStream extends InputStream {
 
-  protected final FSDataInputStream in;
+  protected final MapFile.Reader r;
+  protected LongWritable key = new LongWritable();
+  protected final BytesWritable val = new BytesWritable(new byte[1024*1024]);
 
   protected final Iterator<Map<String,Object>> ext_iter;
+
+  public ExtentsInputStream(MapFile.Reader mfreader, List<Map<String,Object>> extents) {
+    r = mfreader;
+    ext_iter = extents.iterator();
+  }
 
   protected Map<String,?> cur_extent = null;
   protected long cur_pos;
   protected long cur_end;
-
-  public ExtentsInputStream(FSDataInputStream in,
-                            List<Map<String,Object>> extents) {
-    this.in = in;
-    this.ext_iter = extents.iterator();
-  }
  
   protected boolean prepareExtent() {
     // prepare next extent
@@ -66,6 +68,33 @@ public class ExtentsInputStream extends InputStream {
   }
 
   @Override
+  public int read(byte[] buf, int off, int len) throws IOException {
+    if (!prepareExtent()) {
+      return -1;
+    }
+
+    // find the block containing the current position
+    key.set(cur_pos);
+    key = (LongWritable) r.getClosest(key, val, true);
+    if (key == null) {
+      // EOF
+      return -1;
+    }
+
+    // index into the retrieved byte block
+    // NB: int cast is ok because difference isn't more than 2^20
+    final int boff = (int)(cur_pos - key.get());
+    final byte[] block = val.getBytes();
+
+    // copy from the block to the buffer
+    final int rlen = Math.min(len, block.length - boff);
+    System.arraycopy(block, boff, buf, off, rlen);
+    cur_pos += rlen;
+
+    return rlen;
+  }
+
+  @Override
   public int read() throws IOException {
     final byte[] b = new byte[1];
 
@@ -76,22 +105,5 @@ public class ExtentsInputStream extends InputStream {
     } while (rlen == 0);
 
     return rlen == -1 ? -1 : b[0];
-  }
-
-  @Override
-  public int read(byte[] buf, int off, int len) throws IOException {
-    if (!prepareExtent()) {
-      return -1;
-    }
-
-    // NB: cur_end - cur_pos might be larger than 2^31-1, so we must
-    // check that it doesn't overflow an int.
-    int rlen = Math.min(len,
-      (int) Math.min(cur_end - cur_pos, Integer.MAX_VALUE));
-
-    rlen = in.read(cur_pos, buf, off, rlen);
-    cur_pos += rlen;
-
-    return rlen;
   }
 }

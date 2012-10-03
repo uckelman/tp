@@ -18,15 +18,17 @@ limitations under the License.
 
 package com.lightboxtechnologies.spectrum;
 
+import java.io.InputStream;
+import java.io.IOException;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Collection;
-import java.io.*;
 
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.Path;
 
 import org.codehaus.jackson.map.ObjectMapper;
 
@@ -44,7 +46,7 @@ public class FsEntry extends HashMap<String,Object> {
   private Date   Updated;
   private long   Size;
 
-  private FSDataInputStream DiskImage;
+  private Path MFPath;
 
   private final Map<String, Object> Changed = new HashMap<String, Object>();
 
@@ -59,8 +61,8 @@ public class FsEntry extends HashMap<String,Object> {
     Changed.clear();
   }
 
-  public void setDiskImage(FSDataInputStream in) {
-    DiskImage = in;
+  public void setMapFilePath(Path mfpath) {
+    MFPath = mfpath;
   }
 
   public Map<String, Object> getChangedItems() {
@@ -140,7 +142,7 @@ public class FsEntry extends HashMap<String,Object> {
     final StreamProxy val = Streams.get(key);
     if (val != null) {
       try {
-        return new PyFile(val.open(FS, DiskImage, this));
+        return new PyFile(val.open(FS, MFPath, (List<Map<String,Object>>) get("extents")));
       }
       catch (IOException ex) {}
     }
@@ -154,7 +156,7 @@ public class FsEntry extends HashMap<String,Object> {
   public InputStream getInputStream(String key) throws IOException {
     final StreamProxy p = Streams.get(key);
     if (p != null) {
-      return p.open(FS, DiskImage, this);
+      return p.open(FS, MFPath, (List<Map<String,Object>>) get("extents"));
     }
     return null;
   }

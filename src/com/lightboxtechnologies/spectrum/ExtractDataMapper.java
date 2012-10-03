@@ -19,7 +19,6 @@ package com.lightboxtechnologies.spectrum;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.filecache.DistributedCache;
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.hbase.KeyValue;
@@ -29,6 +28,7 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.io.hfile.Compression;
 import org.apache.hadoop.io.LongWritable;
+import org.apache.hadoop.io.MapFile;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -74,8 +74,8 @@ public class ExtractDataMapper
 
   private final ImmutableBytesWritable OutKey = new ImmutableBytesWritable();
   private SequenceFile.Reader Extents = null;
-  private FSDataInputStream ImgFile = null;
-  private Path ImgPath = null;
+  private MapFile.Reader MFReader = null;
+  private Path MFPath = null;
 
   private final byte[] Buffer = new byte[SIZE_THRESHOLD];
   private MessageDigest MD5Hash,
@@ -110,16 +110,16 @@ public class ExtractDataMapper
     EntryTbl = new HTable(conf, HBaseTables.ENTRIES_TBL_B);
   }
 
-  void openImgFile(Path p, FileSystem fs) throws IOException {
-    if (ImgFile != null && p.equals(ImgPath)) {
+  void openMapFile(Path p, Configuration conf) throws IOException {
+    if (MFReader != null && p.equals(MFPath)) {
       return;
     }
-    IOUtils.closeQuietly(ImgFile);
-    ImgPath = p;
-    ImgFile = fs.open(p, 64 * 1024 * 1024);
+
+    MFPath = p;
+    MFReader = new MapFile.Reader(p, conf);
   }
 
-  void extract(FSDataInputStream file, OutputStream outStream, Map<String,?> attrs, Context ctx) throws IOException {
+  void extract(MapFile.Reader reader, OutputStream outStream, Map<String,?> attrs, Context ctx) throws IOException {
     @SuppressWarnings("unchecked")
     final List<Map<String,Object>> extents =
       (List<Map<String,Object>>) attrs.get("extents");
@@ -130,8 +130,9 @@ public class ExtractDataMapper
 
     InputStream in = null;
     try {
-      in = new ExtentsInputStream(file, extents);
+      in = new ExtentsInputStream(reader, extents);
 
+// FIXME: Maybe replace this with something from IOUtils?
       int rlen;
       while (read < size) {
         // NB: size - read might be larger than 2^31-1, so we must
@@ -219,7 +220,7 @@ public class ExtractDataMapper
     return extents;
   }
 
-  protected void hashAndExtract(final Map<String,Object> rec, OutputStream out, FSDataInputStream file, Map<String,?> map, Context context) throws IOException {
+  protected void hashAndExtract(final Map<String,Object> rec, MapFile.Reader reader, OutputStream out, Map<String,?> map, Context context) throws IOException {
     MD5Hash.reset();
     SHA1Hash.reset();
 
@@ -227,7 +228,7 @@ public class ExtractDataMapper
     try {
       dout = new DigestOutputStream(
               new DigestOutputStream(out, MD5Hash), SHA1Hash);
-      extract(file, dout, map, context);
+      extract(reader, dout, map, context);
     }
     finally {
       IOUtils.closeQuietly(dout);
@@ -237,11 +238,11 @@ public class ExtractDataMapper
     rec.put("sha1", SHA1Hash.digest());
   }
 
-  protected Map<String,Object> process_extent_small(FSDataInputStream file, long fileSize, Map<String,?> map, Context context) throws IOException {
+  protected Map<String,Object> process_extent_small(MapFile.Reader mfreader, long fileSize, Map<String,?> map, Context context) throws IOException {
     context.getCounter(FileTypes.SMALL).increment(1);
 
     final Map<String,Object> rec = new HashMap<String,Object>();
-    hashAndExtract(rec, NullStream, file, map, context);
+    hashAndExtract(rec, mfreader, NullStream, map, context);
 
     // FIXME: makes a second copy; would be nice to give
     // Put a portion of Buffer; can probably do this with
@@ -253,14 +254,11 @@ public class ExtractDataMapper
     return rec;
   }
 
-  protected Map<String,Object> process_extent_large(FSDataInputStream file, FileSystem fs, Path outPath, Map<String,?> map, Context context) throws IOException {
+  protected Map<String,Object> process_extent_large(MapFile.Reader mfreader, Map<String,?> map, Context context) throws IOException {
     context.getCounter(FileTypes.BIG).increment(1);
 
     final Map<String,Object> rec = new HashMap<String,Object>();
-    hashAndExtract(rec, NullStream, file, map, context);
-
-    final List<Map<String,Object>> extents =
-      (List<Map<String,Object>>) map.get("extents");
+    hashAndExtract(rec, mfreader, NullStream, map, context);
 
     final StreamProxy content = new ExtentsProxy();
     rec.put("Content", content);
@@ -298,7 +296,7 @@ public class ExtractDataMapper
 
   protected static final byte[] empty = new byte[0];
 
-  protected void process_extent(FSDataInputStream file, FileSystem fs, Path outPath, Map<String,?> map, Context context) throws IOException, InterruptedException {
+  protected void process_extent(MapFile.Reader mfreader, Map<String,?> map, Context context) throws IOException, InterruptedException {
     final String id = (String)map.get("id");
     byte[] id_b = null;
     try {
@@ -309,7 +307,7 @@ public class ExtractDataMapper
     }
 
     final long fileSize = ((Number) map.get("size")).longValue();
-    StringBuilder sb = new StringBuilder("Extracting ");
+    final StringBuilder sb = new StringBuilder("Extracting ");
     sb.append(id);
     sb.append(":");
     sb.append((String)map.get("fp"));
@@ -320,8 +318,8 @@ public class ExtractDataMapper
     MD5Hash.reset();
 
     final Map<String,Object> rec = fileSize > SIZE_THRESHOLD ?
-      process_extent_large(file, fs, outPath, map, context) :
-      process_extent_small(file, fileSize, map, context);
+      process_extent_large(mfreader, map, context) :
+      process_extent_small(mfreader, fileSize, map, context);
 
     // check if the md5 is known
     final byte[] md5 = hash_lookup_and_mark(rec, "md5");
@@ -347,16 +345,14 @@ public class ExtractDataMapper
     context.write(OutKey, ovSHA1);
   }
 
-  protected int process_extents(FileSystem fs, Path path, SequenceFile.Reader extents, LongWritable offset, long endOffset, Context context) throws IOException, InterruptedException {
-
+  protected int process_extents(Path path, SequenceFile.Reader extents, LongWritable offset, long endOffset, Context context) throws IOException, InterruptedException {
     int numFiles = 0;
     long cur = offset.get();
 
     final JsonWritable attrs = new JsonWritable();
-    final Path outPath = new Path("/texaspete/ev/tmp", UUID.randomUUID().toString());
 
     try {
-      openImgFile(path, fs);
+      openMapFile(path, context.getConfiguration());
       extents.getCurrentValue(attrs);
 
       do {
@@ -364,7 +360,7 @@ public class ExtractDataMapper
 
         @SuppressWarnings("unchecked")
         final Map<String,?> map = (Map<String,?>)attrs.get();
-        process_extent(ImgFile, fs, outPath, map, context);
+        process_extent(MFReader, map, context);
 
       } while (extents.next(offset, attrs) && (cur = offset.get()) < endOffset);
     }
@@ -398,7 +394,7 @@ public class ExtractDataMapper
 
       if (offset != null && offset.get() < endOffset) {
         numFiles = process_extents(
-          fs, split.getPath(), Extents, offset, endOffset, context
+          split.getPath(), Extents, offset, endOffset, context
         );
       }
       LOG.info("This split had " + numFiles + " files in it");
@@ -419,7 +415,7 @@ public class ExtractDataMapper
 
   @Override
   protected void cleanup(Mapper.Context context) {
-    IOUtils.closeQuietly(ImgFile);
+    IOUtils.closeQuietly(MFReader);
     closeTable(HashTbl);
     closeTable(EntryTbl);
   }

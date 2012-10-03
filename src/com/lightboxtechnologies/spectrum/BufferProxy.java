@@ -18,9 +18,11 @@ package com.lightboxtechnologies.spectrum;
 
 import java.io.InputStream;
 import java.io.ByteArrayInputStream;
+import java.util.List;
+import java.util.Map;
 
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.Path;
 
 class BufferProxy implements StreamProxy {
 
@@ -34,7 +36,7 @@ class BufferProxy implements StreamProxy {
     return Buffer;
   }
 
-  public InputStream open(FileSystem fs, FSDataInputStream di, FsEntry entry) { // doesn't need FS
+  public InputStream open(FileSystem fs, Path mf, List<Map<String,Object>> extents) {
     return new ByteArrayInputStream(Buffer);
   }
 }

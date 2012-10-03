@@ -5,7 +5,6 @@ import java.util.Arrays;
 import java.util.Map;
 
 import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.HTable;
@@ -36,7 +35,6 @@ public class FsEntryRecordReader
   private final byte[] Last;
 
   private final HTable ImagesTbl;
-  private FSDataInputStream DiskImage;
   private FileSystem FS;
   private byte[] CurImage;
 
@@ -102,9 +100,8 @@ public class FsEntryRecordReader
 
     final byte[] path_b =
       result.getValue(HBaseTables.IMAGES_COLFAM_B, path_col);
-    
-    final FSDataInputStream in = FS.open(new Path(new String(path_b)));
-    Value.setDiskImage(in);
+ 
+    Value.setMapFilePath(new Path(new String(path_b)));  
   }
 
   public boolean nextKeyValue() throws IOException, InterruptedException {

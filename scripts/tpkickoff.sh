@@ -52,13 +52,14 @@ HADOOP=/usr/bin/hadoop
 #fi
 JarFile=lib/tp.jar
 
-JsonFile=$FriendlyName.json
-HdfsImage=$FriendlyName.dd
+JsonFile=/texaspete/json/$FriendlyName.json
+#HdfsImage=/texaspete/map/$FriendlyName
+HdfsImage=$FriendlyName
 
 echo "jar file is ${JarFile}"
 
 # rip filesystem metadata, upload to hdfs
-$FSRIP dumpfs $ImagePath | $HADOOP fs -put $JsonFile
+$FSRIP dumpfs $ImagePath | $HADOOP fs -put - $JsonFile
 if [ $? -ne 0 ]; then
   echo "image metadata upload failed"
   exit 1
