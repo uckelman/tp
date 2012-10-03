@@ -111,8 +111,13 @@ public class ExtractDataMapper
   }
 
   void openMapFile(Path p, Configuration conf) throws IOException {
-    if (MFReader != null && p.equals(MFPath)) {
-      return;
+    if (MFReader != null) {
+      if (p.equals(MFPath)) {
+        return;
+      }
+      else {
+        MFReader.close();
+      }
     }
 
     MFPath = p;
